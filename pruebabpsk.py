@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from generadores.canalisi import generate_canalisi
+
 # ==============================
 # 1. PARÁMETROS DEL SISTEMA
 # ==============================
@@ -13,8 +14,14 @@ beta = 0.25
 span = 30
 snr_db = 1000
 
-h_chan = generate_canalisi(length=2, attenuation=0)  # Canal ideal
+phi1 = np.pi / 4
+phi2 = np.pi / 2
 
+h_chan = [
+    1,
+    0.3 * np.exp(1j * phi1),
+    0.1 * np.exp(1j * phi2)
+]
 # ==============================
 # 2. BITS Y MODULACIÓN BPSK
 # ==============================
