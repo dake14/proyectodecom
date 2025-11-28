@@ -1,88 +1,115 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy import signal
-from numpy.fft import fftshift, fft
-from generadores.canalisi import generate_canalisi
+from scipy.signal import lfilter, butter, freqz
+from numpy.fft import fft, fftshift
 
-# Parámetros de la simulación
-N = 1000  # Número de bits
-sps = 8   # Muestras por símbolo
-EbN0_dB = 1000  # Eb/N0 en dB para el canal con ruido
-ISI_taps = 4  # Coeficientes del canal ISI
+# Parámetros
+N = 1000                   # Número de símbolos
+M = 4                      # ASK de 4 niveles
+Rb = 1000                  # Tasa de bits
+Fs = 10000                 # Frecuencia de muestreo
+fc = 2000                  # Frecuencia de portadora
+Ts = 1 / Rb                # Tiempo de símbolo
+samples_per_symbol = int(Fs * Ts)
+ISI_values = [0.0, 0.3, 0.6, 0.9]
+SNR_dB_range = np.arange(0, 21, 5)
+amplitudes = np.linspace(1, M, M)
 
-# 1. Generar bits aleatorios y BPSK (0 -> -1, 1 -> 1)
-bits = np.random.randint(0, 2, N)
-symbols = 2*bits - 1  # BPSK mapping
+# Señal baseband ASK multinivel
+def generate_ask_symbols(N, M):
+    symbols = np.random.randint(0, M, N)
+    levels = np.linspace(-1, 1, M)  # Niveles balanceados
+    return levels[symbols], levels
 
-# 2. Pulso rectangular (dirac a sps)
-symbols_upsampled = np.zeros(len(symbols) * sps)
-symbols_upsampled[::sps] = symbols
+# Aplicar ISI con un filtro simple
+def apply_isi(signal, isi_factor):
+    h = np.array([1, isi_factor])
+    return lfilter(h, [1], signal)
 
-# 3. Filtro de modelado: Raised Cosine (pasa banda)
-rolloff = 0.35
-num_taps = 101
-t, h_rc = signal.kaiserord(60, rolloff / sps)
-h_rc = signal.firwin(num_taps, 1/sps, window='hamming')
+# Modulador pasabanda ASK
+def modulate_passband(symbols, fc, Fs, samples_per_symbol):
+    t = np.arange(len(symbols) * samples_per_symbol) / Fs
+    upsampled = np.zeros(len(t))
+    upsampled[::samples_per_symbol] = symbols
+    carrier = np.cos(2 * np.pi * fc * t)
+    return upsampled * carrier, t
 
-# Señal transmitida (ideal)
-tx_signal = np.convolve(symbols_upsampled, h_rc, mode='same')
+# Añadir ruido blanco
+def add_awgn(signal, SNR_dB):
+    signal_power = np.mean(signal ** 2)
+    SNR_linear = 10 ** (SNR_dB / 10)
+    noise_power = signal_power / SNR_linear
+    noise = np.sqrt(noise_power) * np.random.randn(len(signal))
+    return signal + noise
 
-# 4. Canal con ISI
-channel = generate_canalisi(length=4, attenuation=0-3)
-channel[::sps] = ISI_taps  # ISI entre símbolos
-rx_signal_isi = np.convolve(tx_signal, channel, mode='same')
-
-# 5. Agregar ruido AWGN
-EbN0 = 10**(EbN0_dB/10)
-Es = np.sum(np.abs(tx_signal)**2) / len(tx_signal)
-N0 = Es / EbN0
-noise = np.sqrt(N0/2) * np.random.randn(len(rx_signal_isi))
-rx_signal_isi_awgn = rx_signal_isi + noise
-
-# Función para graficar espectro
-def plot_spectrum(signal, sps, title):
-    f = np.linspace(-0.5, 0.5, len(signal))
-    spectrum = fftshift(np.abs(fft(signal)))
-    plt.plot(f, 20*np.log10(spectrum/np.max(spectrum)))
+# Gráfica de constelación
+def plot_constellation(symbols, title="Constelación"):
+    plt.figure()
+    plt.scatter(symbols, np.zeros_like(symbols), c='red')
     plt.title(title)
-    plt.xlabel("Frecuencia normalizada")
-    plt.ylabel("Magnitud (dB)")
-    plt.grid()
+    plt.xlabel("Amplitud")
+    plt.grid(True)
+    plt.show()
 
-# Función para graficar constelación
-def plot_constellation(signal, sps, title):
-    # Tomar muestras en cada símbolo (asumiendo sincronía perfecta)
-    samples = signal[::sps]
-    plt.plot(samples.real, samples.imag, 'o')
+# Espectro de la señal
+def plot_spectrum(signal, Fs, title="Espectro"):
+    plt.figure()
+    freqs = np.linspace(-Fs/2, Fs/2, len(signal))
+    spectrum = np.abs(fftshift(fft(signal)))
+    plt.plot(freqs, spectrum)
     plt.title(title)
-    plt.grid()
-    plt.xlabel("I")
-    plt.ylabel("Q")
+    plt.xlabel("Frecuencia (Hz)")
+    plt.ylabel("Magnitud")
+    plt.grid(True)
+    plt.show()
 
-# 6. Visualizaciones
-plt.figure(figsize=(12, 10))
+# Señal en el tiempo
+def plot_signal_time(signal, t, title="Señal en el tiempo"):
+    plt.figure()
+    plt.plot(t[:1000], signal[:1000])
+    plt.title(title)
+    plt.xlabel("Tiempo (s)")
+    plt.ylabel("Amplitud")
+    plt.grid(True)
+    plt.show()
 
-plt.subplot(3, 2, 1)
-plt.plot(tx_signal[:500])
-plt.title("Señal en el tiempo (Ideal)")
-plt.grid()
+# Calcular SNR real
+def calculate_snr(signal, noisy_signal):
+    noise = noisy_signal - signal
+    return 10 * np.log10(np.mean(signal**2) / np.mean(noise**2))
 
-plt.subplot(3, 2, 2)
-plot_spectrum(tx_signal, sps, "Espectro señal (Ideal)")
+# Matriz de SNR vs. ISI
+results = np.zeros((len(ISI_values), len(SNR_dB_range)))
 
-plt.subplot(3, 2, 3)
-plt.plot(rx_signal_isi_awgn[:500])
-plt.title("Señal en el tiempo (Canal ISI + AWGN)")
-plt.grid()
+for i, isi in enumerate(ISI_values):
+    for j, snr in enumerate(SNR_dB_range):
+        baseband_symbols, levels = generate_ask_symbols(N, M)
+        symbols_isi = apply_isi(baseband_symbols, isi)
+        modulated, t = modulate_passband(symbols_isi, fc, Fs, samples_per_symbol)
+        received = add_awgn(modulated, snr)
+        actual_snr = calculate_snr(modulated, received)
+        results[i, j] = actual_snr
 
-plt.subplot(3, 2, 4)
-plot_spectrum(rx_signal_isi_awgn, sps, "Espectro señal (ISI + AWGN)")
+# Mostrar matriz de resultados
+import pandas as pd
+import seaborn as sns
 
-plt.subplot(3, 2, 5)
-plot_constellation(tx_signal, sps, "Constelación (Ideal)")
+df = pd.DataFrame(results, index=[f"ISI={x:.1f}" for x in ISI_values],
+                  columns=[f"SNR_in={x}dB" for x in SNR_dB_range])
 
-plt.subplot(3, 2, 6)
-plot_constellation(rx_signal_isi_awgn, sps, "Constelación (ISI + AWGN)")
-
-plt.tight_layout()
+plt.figure(figsize=(10, 6))
+sns.heatmap(df, annot=True, fmt=".2f", cmap="viridis")
+plt.title("SNR Real vs. ISI y SNR_in")
 plt.show()
+
+# Graficar constelación
+baseband_symbols, _ = generate_ask_symbols(200, M)
+plot_constellation(baseband_symbols, "Constelación ASK M=4")
+
+# Graficar señal pasabanda
+symbols_isi = apply_isi(baseband_symbols, isi_factor=0.5)
+modulated_signal, t = modulate_passband(symbols_isi, fc, Fs, samples_per_symbol)
+plot_signal_time(modulated_signal, t, "Señal Pasabanda con ISI")
+
+# Graficar espectro
+plot_spectrum(modulated_signal, Fs, "Espectro de la Señal Pasabanda")
